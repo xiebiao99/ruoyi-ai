@@ -71,6 +71,15 @@ services:
     depends_on:
       - "standalone"
 
+  m3e:
+    image: registry.cn-hangzhou.aliyuncs.com/fastgpt_docker/m3e-large-api:latest
+    container_name: m3e
+    restart: always
+    ports:
+      - 6008:6008
+    environment:
+      - TZ=Asia/Shanghai
+
 networks:
   default:
     name: milvus
