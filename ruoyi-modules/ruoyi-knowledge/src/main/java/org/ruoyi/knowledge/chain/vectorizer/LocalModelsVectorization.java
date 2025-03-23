@@ -1,7 +1,6 @@
 package org.ruoyi.knowledge.chain.vectorizer;
 
 import jakarta.annotation.Resource;
-import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.ruoyi.common.chat.config.ChatConfig;
@@ -24,7 +23,8 @@ public class LocalModelsVectorization   {
     @Resource
     private LocalModelsofitClient localModelsofitClient;
 
-    @Getter
+//    @Getter
+    @Resource
     private OpenAiStreamClient openAiStreamClient;
 
     private final ChatConfig chatConfig;

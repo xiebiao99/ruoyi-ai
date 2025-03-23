@@ -1,7 +1,6 @@
 package org.ruoyi.controller;
 
 import cn.dev33.satoken.stp.StpUtil;
-import com.theokanning.openai.completion.chat.ChatMessageRole;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
@@ -11,6 +10,7 @@ import org.ruoyi.common.chat.config.ChatConfig;
 import org.ruoyi.common.chat.domain.request.ChatRequest;
 import org.ruoyi.common.chat.entity.chat.ChatCompletion;
 import org.ruoyi.common.chat.entity.chat.Message;
+import org.ruoyi.common.chat.openai.EmbeddingStreamClient;
 import org.ruoyi.common.chat.openai.OpenAiStreamClient;
 import org.ruoyi.common.core.domain.R;
 import org.ruoyi.common.core.validate.AddGroup;
@@ -21,6 +21,7 @@ import org.ruoyi.common.mybatis.core.page.PageQuery;
 import org.ruoyi.common.mybatis.core.page.TableDataInfo;
 import org.ruoyi.common.satoken.utils.LoginHelper;
 import org.ruoyi.common.web.core.BaseController;
+import org.ruoyi.knowledge.chain.vectorstore.VectorStore;
 import org.ruoyi.knowledge.domain.bo.KnowledgeAttachBo;
 import org.ruoyi.knowledge.domain.bo.KnowledgeFragmentBo;
 import org.ruoyi.knowledge.domain.bo.KnowledgeInfoBo;
@@ -35,10 +36,8 @@ import org.ruoyi.knowledge.service.IKnowledgeInfoService;
 import org.ruoyi.system.listener.SSEEventSourceListener;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
-import org.ruoyi.knowledge.chain.vectorstore.VectorStore;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import java.util.ArrayList;
 import java.util.List;
 
 
@@ -65,6 +64,7 @@ public class KnowledgeController extends BaseController {
     private final EmbeddingService embeddingService;
 
     private OpenAiStreamClient openAiStreamClient;
+    private EmbeddingStreamClient embeddingStreamClient;
 
     private final ChatConfig chatConfig;
 
@@ -74,7 +74,8 @@ public class KnowledgeController extends BaseController {
     @PostMapping("/send")
     public SseEmitter send(@RequestBody @Valid ChatRequest chatRequest) {
         openAiStreamClient = chatConfig.getOpenAiStreamClient();
-        SseEmitter sseEmitter = new SseEmitter(0L);
+        embeddingStreamClient = chatConfig.getEmbeddingStreamClient();
+        SseEmitter sseEmitter = new SseEmitter(120_000L);
         SSEEventSourceListener openAIEventSourceListener = new SSEEventSourceListener(sseEmitter);
         List<Message> messages = chatRequest.getMessages();
         String content = messages.get(messages.size() - 1).getContent().toString();
@@ -87,16 +88,19 @@ public class KnowledgeController extends BaseController {
         }
         Message userMessage = Message.builder().content(content + (nearestList.size() > 0 ? "\n\n注意：回答问题时，须严格根据我给你的系统上下文内容原文进行回答，请不要自己发挥,回答时保持原来文本的段落层级" : "") ).role(Message.Role.USER).build();
         messages.add(userMessage);
+        String model = "gpt-3.5-turbo";
         ChatCompletion completion = ChatCompletion
             .builder()
             .messages(messages)
-            .model(chatRequest.getModel())
+//            .model(chatRequest.getModel())
+            .model(model)
             .temperature(chatRequest.getTemperature())
             .topP(chatRequest.getTop_p())
             .stream(true)
             .build();
         openAiStreamClient.streamChatCompletion(completion, openAIEventSourceListener);
-
+//        embeddingStreamClient.streamChatCompletion(completion, openAIEventSourceListener);
+//        return embeddingStreamClient.ollamaChat(completion.getMessages());
         return sseEmitter;
     }
 

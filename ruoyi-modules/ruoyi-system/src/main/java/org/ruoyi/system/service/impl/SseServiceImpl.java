@@ -629,7 +629,8 @@ public class SseServiceImpl implements ISseService {
         Message message = msgList.get(msgList.size() - 1);
         OllamaAPI api = new OllamaAPI(host);
         api.setRequestTimeoutSeconds(100);
-        OllamaChatRequestBuilder builder = OllamaChatRequestBuilder.getInstance(parts[1]);
+        String model = parts[1];
+        OllamaChatRequestBuilder builder = OllamaChatRequestBuilder.getInstance(model);
         OllamaChatRequestModel requestModel = builder
             .withMessage(OllamaChatMessageRole.USER,
                 message.getContent().toString())

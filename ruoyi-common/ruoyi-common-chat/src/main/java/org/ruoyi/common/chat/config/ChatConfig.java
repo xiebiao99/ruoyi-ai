@@ -4,6 +4,7 @@ import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import okhttp3.OkHttpClient;
 import okhttp3.logging.HttpLoggingInterceptor;
+import org.ruoyi.common.chat.openai.EmbeddingStreamClient;
 import org.ruoyi.common.chat.openai.OpenAiStreamClient;
 import org.ruoyi.common.chat.openai.function.KeyRandomStrategy;
 import org.ruoyi.common.chat.openai.interceptor.OpenAILogger;
@@ -25,6 +26,8 @@ public class ChatConfig {
 
     @Getter
     private OpenAiStreamClient openAiStreamClient;
+    @Getter
+    private EmbeddingStreamClient embeddingStreamClient;
 
     private final ConfigService configService;
 
@@ -52,5 +55,32 @@ public class ChatConfig {
             .keyStrategy(new KeyRandomStrategy())
             .okHttpClient(okHttpClient)
             .build();
+    }
+
+
+    // 重启才会生效
+    @Bean
+    public EmbeddingStreamClient embeddingStreamClient() {
+        String apiHost = configService.getConfigValue("embedding", "apiHost");
+        String apiKey = configService.getConfigValue("embedding", "apiKey");
+        embeddingStreamClient = createEmbeddingStreamClient(apiHost,apiKey);
+        return embeddingStreamClient;
+    }
+
+    public EmbeddingStreamClient createEmbeddingStreamClient(String apiHost, String apiKey) {
+        HttpLoggingInterceptor httpLoggingInterceptor = new HttpLoggingInterceptor(new OpenAILogger());
+        httpLoggingInterceptor.setLevel(HttpLoggingInterceptor.Level.HEADERS);
+        OkHttpClient okHttpClient = new OkHttpClient.Builder()
+                .addInterceptor(httpLoggingInterceptor)
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .writeTimeout(600, TimeUnit.SECONDS)
+                .readTimeout(600, TimeUnit.SECONDS)
+                .build();
+        return EmbeddingStreamClient.builder()
+                .apiHost(apiHost)
+                .apiKey(Collections.singletonList(apiKey))
+                .keyStrategy(new KeyRandomStrategy())
+                .okHttpClient(okHttpClient)
+                .build();
     }
 }

@@ -1,17 +1,15 @@
 package org.ruoyi.knowledge.chain.vectorizer;
 
 import jakarta.annotation.Resource;
-import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.ruoyi.common.chat.config.ChatConfig;
 import org.ruoyi.common.chat.entity.embeddings.Embedding;
-
 import org.ruoyi.common.chat.entity.embeddings.EmbeddingResponse;
+import org.ruoyi.common.chat.openai.EmbeddingStreamClient;
 import org.ruoyi.common.chat.openai.OpenAiStreamClient;
 import org.ruoyi.knowledge.domain.vo.KnowledgeInfoVo;
 import org.ruoyi.knowledge.service.IKnowledgeInfoService;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
@@ -32,8 +30,11 @@ public class OpenAiVectorization implements Vectorization {
     @Resource
     private LocalModelsVectorization localModelsVectorization;
 
-    @Getter
+//    @Getter
+    @Resource
     private OpenAiStreamClient openAiStreamClient;
+    @Resource
+    private EmbeddingStreamClient embeddingStreamClient;
 
     private final ChatConfig chatConfig;
 
@@ -45,15 +46,16 @@ public class OpenAiVectorization implements Vectorization {
         KnowledgeInfoVo knowledgeInfoVo = knowledgeInfoService.queryById(Long.valueOf(kid));
 
         // 如果使用本地模型
-        try {
-            return localModelsVectorization.batchVectorization(chunkList, kid);
-        } catch (Exception e) {
-            log.error("Local models vectorization failed, falling back to OpenAI embeddings", e);
-        }
+//        try {
+//            return localModelsVectorization.batchVectorization(chunkList, kid);
+//        } catch (Exception e) {
+//            log.error("Local models vectorization failed, falling back to OpenAI embeddings", e);
+//        }
 
         // 如果本地模型失败，则调用 OpenAI 服务进行向量化
         Embedding embedding = buildEmbedding(chunkList, knowledgeInfoVo);
-        EmbeddingResponse embeddings = openAiStreamClient.embeddings(embedding);
+//        EmbeddingResponse embeddings = openAiStreamClient.embeddings(embedding);
+        EmbeddingResponse embeddings = embeddingStreamClient.embeddings(embedding);
 
         // 处理 OpenAI 返回的嵌入数据
         vectorList = processOpenAiEmbeddings(embeddings);

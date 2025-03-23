@@ -2,13 +2,10 @@ package org.ruoyi.common.chat.openai;
 
 import cn.hutool.core.collection.CollectionUtil;
 import cn.hutool.core.util.StrUtil;
-import cn.hutool.http.ContentType;
 import cn.hutool.json.JSONUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.ollama4j.OllamaAPI;
-import io.github.ollama4j.models.chat.OllamaChatMessageRole;
-import io.github.ollama4j.models.chat.OllamaChatRequestBuilder;
-import io.github.ollama4j.models.chat.OllamaChatRequestModel;
+import io.github.ollama4j.models.chat.*;
 import io.github.ollama4j.models.generate.OllamaStreamHandler;
 import io.reactivex.Single;
 import lombok.Getter;
@@ -19,8 +16,8 @@ import okhttp3.sse.EventSource;
 import okhttp3.sse.EventSourceListener;
 import okhttp3.sse.EventSources;
 import org.jetbrains.annotations.NotNull;
+import org.ruoyi.common.chat.constant.EmbeddingConst;
 import org.ruoyi.common.chat.constant.OpenAIConst;
-import org.ruoyi.common.chat.domain.request.ChatRequest;
 import org.ruoyi.common.chat.entity.Tts.TextToSpeech;
 import org.ruoyi.common.chat.entity.billing.BillingUsage;
 import org.ruoyi.common.chat.entity.billing.KeyInfo;
@@ -43,9 +40,8 @@ import org.ruoyi.common.chat.openai.interceptor.DynamicKeyOpenAiAuthInterceptor;
 import org.ruoyi.common.chat.openai.interceptor.OpenAiAuthInterceptor;
 import org.ruoyi.common.chat.openai.plugin.PluginAbstract;
 import org.ruoyi.common.chat.openai.plugin.PluginParam;
-import org.ruoyi.common.chat.sse.DefaultPluginListener;
-import org.ruoyi.common.chat.sse.PluginListener;
 import org.ruoyi.common.core.exception.base.BaseException;
+import org.springframework.beans.BeanUtils;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import retrofit2.Call;
 import retrofit2.Retrofit;
@@ -60,7 +56,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 描述： open ai 客户端
+ * 描述： 本地m3e嵌入向量 客户端
  *
  * @author https:www.unfbx.com
  * 2023-02-28
@@ -69,7 +65,7 @@ import java.util.concurrent.TimeUnit;
 @Getter
 @Slf4j
 @Setter
-public class OpenAiStreamClient {
+public class EmbeddingStreamClient {
 
     @NotNull
     private List<String> apiKey;
@@ -89,7 +85,7 @@ public class OpenAiStreamClient {
      */
     private KeyStrategyFunction<List<String>, String> keyStrategy;
 
-    private OpenAiApi openAiApi;
+    private EmbeddingApi embeddingApi;
 
     /**
      * 自定义鉴权处理拦截器<br/>
@@ -108,14 +104,14 @@ public class OpenAiStreamClient {
      *
      * @param builder
      */
-    private OpenAiStreamClient(Builder builder) {
+    private EmbeddingStreamClient(Builder builder) {
         if (CollectionUtil.isEmpty(builder.apiKey)) {
             throw new BaseException(CommonError.API_KEYS_NOT_NUL.msg());
         }
         apiKey = builder.apiKey;
 
         if (StrUtil.isBlank(builder.apiHost)) {
-            builder.apiHost = OpenAIConst.OPENAI_HOST;
+            builder.apiHost = EmbeddingConst.EMBEDDING_HOST;
         }
         apiHost = builder.apiHost;
 
@@ -143,12 +139,12 @@ public class OpenAiStreamClient {
         }
         okHttpClient = builder.okHttpClient;
 
-        this.openAiApi = new Retrofit.Builder()
+        this.embeddingApi = new Retrofit.Builder()
                 .baseUrl(apiHost)
                 .client(okHttpClient)
                 .addCallAdapterFactory(RxJava2CallAdapterFactory.create())
                 .addConverterFactory(JacksonConverterFactory.create())
-                .build().create(OpenAiApi.class);
+                .build().create(EmbeddingApi.class);
     }
 
     /**
@@ -185,53 +181,150 @@ public class OpenAiStreamClient {
         try {
             EventSource.Factory factory = EventSources.createFactory(this.okHttpClient);
             ObjectMapper mapper = new ObjectMapper();
+            ChatCompletion chatCompletion1 = new ChatCompletion();
+            BeanUtils.copyProperties(chatCompletion, chatCompletion1);
+            List<Message> messages = chatCompletion1.getMessages();
             String requestBody = mapper.writeValueAsString(chatCompletion);
-            String baseUrl = this.apiHost + "v1/chat/completions";
+
+
+            String apiKey = "sk-W9KVRzT6E4BjPMlS20BbF8997f294b768670F5DaB82bEaE2";
+            String baseUrl = "https://api.chatweb.plus/v1/chat/completions";
+
+            RequestBody body = RequestBody.create(requestBody, MediaType.get("application/json; charset=utf-8"));
             Request request = new Request.Builder()
+//                .url("https://api.openai.com/v1/chat/completions")
                     .url(baseUrl)
-                    .post(RequestBody.create(MediaType.parse(ContentType.JSON.getValue()), requestBody))
-                    .build();
+                    .addHeader("Content-Type", "application/json")
+                    .addHeader("Authorization", apiKey)
+                    .post(body).build();
             factory.newEventSource(request, eventSourceListener);
         } catch (Exception e) {
             log.error("请求参数解析异常：{}", e.getMessage());
         }
+
     }
 
-
-    public SseEmitter ollamaChat(ChatRequest chatRequest) {
-        String[] parts = chatRequest.getModel().split("ollama-");
-        final SseEmitter emitter = new SseEmitter();
+    public SseEmitter ollamaChat(List<Message> msgList) {
+//        String[] parts = chatRequest.getModel().split("ollama-");
+        String model = "deepseek-r1:8b";
+        // 1. 显式设置 SSE 超时时间（例如 120 秒）
+        final SseEmitter emitter = new SseEmitter(120_000L); // 单位：毫秒
         String host = "http://127.0.0.1:11434/";
-        List<Message> msgList = chatRequest.getMessages();
         Message message = msgList.get(msgList.size() - 1);
         OllamaAPI api = new OllamaAPI(host);
-        api.setRequestTimeoutSeconds(100);
-        OllamaChatRequestBuilder builder = OllamaChatRequestBuilder.getInstance(parts[1]);
+        api.setRequestTimeoutSeconds(120); // 调整为合理值（如 120 秒）
+        OllamaChatRequestBuilder builder = OllamaChatRequestBuilder.getInstance(model);
         OllamaChatRequestModel requestModel = builder
                 .withMessage(OllamaChatMessageRole.USER,
                         message.getContent().toString())
                 .build();
 
+        List<OllamaChatMessage> ollamaChatMessageList = new ArrayList<>();
+        if (CollectionUtil.isNotEmpty(msgList)) {
+            for (Message messageOld : msgList) {
+                OllamaChatMessage ollamaChatMessage = new OllamaChatMessage();
+                ollamaChatMessage.setContent(messageOld.getContent().toString());
+                if (messageOld.getRole().equals("user")) {
+                    ollamaChatMessage.setRole(OllamaChatMessageRole.USER);
+                } else if (messageOld.getRole().equals("assistant")) {
+                    ollamaChatMessage.setRole(OllamaChatMessageRole.ASSISTANT);
+                } else if (messageOld.getRole().equals("system")) {
+                    ollamaChatMessage.setRole(OllamaChatMessageRole.SYSTEM);
+                }
+                ollamaChatMessageList.add(ollamaChatMessage);
+            }
+        }
+
         // 异步执行 OllAma API 调用
         CompletableFuture.runAsync(() -> {
             try {
                 StringBuilder response = new StringBuilder();
-                OllamaStreamHandler streamHandler = (s) -> {
-                    String substr = s.substring(response.length());
-                    response.append(substr);
-                    System.out.println(substr);
-                    try {
-                        emitter.send(substr);
-                    } catch (IOException e) {
-                        sendErrorEvent(emitter, e.getMessage());
-                    }
-                };
-                api.chat(requestModel, streamHandler);
+//                OllamaStreamHandler streamHandler = (s) -> {
+//                    String substr = s.substring(response.length());
+//                    response.append(substr);
+//                    System.out.println(substr);
+//                    try {
+//                        emitter.send(response);
+//                    } catch (IOException e) {
+//                        sendErrorEvent(emitter, e.getMessage());
+//                    }
+//                };
+//                OllamaChatResult chat1 = api.chat(requestModel, streamHandler);
+                OllamaChatResult chat = api.chat(model, ollamaChatMessageList);
+                String response1 = chat.getResponse();
+                response.append(response1);
+                System.out.println("response1" + response1);
+                System.out.println("response" + response);
+                try {
+                    emitter.send(response);
+                } catch (IOException e) {
+                    sendErrorEvent(emitter, e.getMessage());
+                }
+
                 emitter.complete();
             } catch (Exception e) {
                 sendErrorEvent(emitter, e.getMessage());
             }
         });
+        return emitter;
+    }
+
+    public SseEmitter ollamaChatNew(List<Message> msgList) {
+        String model = "deepseek-r1:8b";
+        // 1. 显式设置 SSE 超时时间（例如 120 秒）
+        final SseEmitter emitter = new SseEmitter(120_000L); // 单位：毫秒
+
+        String host = "http://127.0.0.1:11434/";
+        Message message = msgList.get(msgList.size() - 1);
+        OllamaAPI api = new OllamaAPI(host);
+        api.setRequestTimeoutSeconds(120); // 调整为合理值（如 120 秒）
+
+        // 2. 恢复流式请求构建逻辑
+        OllamaChatRequestBuilder builder = OllamaChatRequestBuilder.getInstance(model);
+        OllamaChatRequestModel requestModel = builder
+                .withMessage(OllamaChatMessageRole.USER, message.getContent().toString())
+                .build();
+
+        List<OllamaChatMessage> ollamaChatMessageList = new ArrayList<>();
+        if (CollectionUtil.isNotEmpty(msgList)) {
+            for (Message messageOld : msgList) {
+                OllamaChatMessage ollamaChatMessage = new OllamaChatMessage();
+                ollamaChatMessage.setContent(messageOld.getContent().toString());
+                if (messageOld.getRole().equals("user")) {
+                    ollamaChatMessage.setRole(OllamaChatMessageRole.USER);
+                } else if (messageOld.getRole().equals("assistant")) {
+                    ollamaChatMessage.setRole(OllamaChatMessageRole.ASSISTANT);
+                } else if (messageOld.getRole().equals("system")) {
+                    ollamaChatMessage.setRole(OllamaChatMessageRole.SYSTEM);
+                }
+                ollamaChatMessageList.add(ollamaChatMessage);
+            }
+        }
+
+        // 3. 使用流式处理逻辑
+        CompletableFuture.runAsync(() -> {
+            try {
+                StringBuilder response = new StringBuilder();
+                OllamaStreamHandler streamHandler = (s) -> {
+                    // 4. 直接发送完整流式块（无需 substring）
+                    try {
+                        emitter.send(s); // 发送完整块
+                        System.out.println("Sent chunk: " + s);
+                    } catch (IOException e) {
+                        sendErrorEvent(emitter, e.getMessage());
+                    }
+                };
+
+                // 5. 调用流式 API 方法
+                api.chat(requestModel, streamHandler); // 确保此方法实际触发多次回调
+
+                // 6. 在流结束时手动触发完成
+                emitter.complete();
+            } catch (Exception e) {
+                sendErrorEvent(emitter, e.getMessage());
+            }
+        });
+
         return emitter;
     }
 
@@ -260,31 +353,31 @@ public class OpenAiStreamClient {
      * @param <R>                       插件自定义函数的请求值
      * @param <T>                       插件自定义函数的返回值
      */
-    public <R extends PluginParam, T> void streamChatCompletionWithPlugin(ChatCompletion chatCompletion, EventSourceListener eventSourceListener, PluginListener pluginEventSourceListener, PluginAbstract<R, T> plugin) {
-        if (Objects.isNull(plugin)) {
-            this.streamChatCompletion(chatCompletion, eventSourceListener);
-            return;
-        }
-        if (CollectionUtil.isEmpty(chatCompletion.getMessages())) {
-            throw new BaseException(CommonError.MESSAGE_NOT_NUL.msg());
-        }
-        Functions functions = Functions.builder()
-                .name(plugin.getFunction())
-                .description(plugin.getDescription())
-                .parameters(plugin.getParameters())
-                .build();
-        //没有值，设置默认值
-        if (Objects.isNull(chatCompletion.getFunctionCall())) {
-            chatCompletion.setFunctionCall("auto");
-        }
-        //tip: 覆盖自己设置的functions参数，使用plugin构造的functions
-        chatCompletion.setFunctions(Collections.singletonList(functions));
-        //调用OpenAi
-        if (Objects.isNull(pluginEventSourceListener)) {
-            pluginEventSourceListener = new DefaultPluginListener(this, eventSourceListener, plugin, chatCompletion);
-        }
-        this.streamChatCompletion(chatCompletion, pluginEventSourceListener);
-    }
+//    public <R extends PluginParam, T> void streamChatCompletionWithPlugin(ChatCompletion chatCompletion, EventSourceListener eventSourceListener, PluginListener pluginEventSourceListener, PluginAbstract<R, T> plugin) {
+//        if (Objects.isNull(plugin)) {
+//            this.streamChatCompletion(chatCompletion, eventSourceListener);
+//            return;
+//        }
+//        if (CollectionUtil.isEmpty(chatCompletion.getMessages())) {
+//            throw new BaseException(CommonError.MESSAGE_NOT_NUL.msg());
+//        }
+//        Functions functions = Functions.builder()
+//                .name(plugin.getFunction())
+//                .description(plugin.getDescription())
+//                .parameters(plugin.getParameters())
+//                .build();
+//        //没有值，设置默认值
+//        if (Objects.isNull(chatCompletion.getFunctionCall())) {
+//            chatCompletion.setFunctionCall("auto");
+//        }
+//        //tip: 覆盖自己设置的functions参数，使用plugin构造的functions
+//        chatCompletion.setFunctions(Collections.singletonList(functions));
+//        //调用OpenAi
+//        if (Objects.isNull(pluginEventSourceListener)) {
+//            pluginEventSourceListener = new DefaultPluginListener(this, eventSourceListener, plugin, chatCompletion);
+//        }
+//        this.streamChatCompletion(chatCompletion, pluginEventSourceListener);
+//    }
 
 
     /**
@@ -298,10 +391,10 @@ public class OpenAiStreamClient {
      * @param <R>                 插件自定义函数的请求值
      * @param <T>                 插件自定义函数的返回值
      */
-    public <R extends PluginParam, T> void streamChatCompletionWithPlugin(ChatCompletion chatCompletion, EventSourceListener eventSourceListener, PluginAbstract<R, T> plugin) {
-        PluginListener pluginEventSourceListener = new DefaultPluginListener(this, eventSourceListener, plugin, chatCompletion);
-        this.streamChatCompletionWithPlugin(chatCompletion, eventSourceListener, pluginEventSourceListener, plugin);
-    }
+//    public <R extends PluginParam, T> void streamChatCompletionWithPlugin(ChatCompletion chatCompletion, EventSourceListener eventSourceListener, PluginAbstract<R, T> plugin) {
+//        PluginListener pluginEventSourceListener = new DefaultPluginListener(this, eventSourceListener, plugin, chatCompletion);
+//        this.streamChatCompletionWithPlugin(chatCompletion, eventSourceListener, pluginEventSourceListener, plugin);
+//    }
 
 
     /**
@@ -315,9 +408,9 @@ public class OpenAiStreamClient {
      * @param <R>                 插件自定义函数的请求值
      * @param <T>                 插件自定义函数的返回值
      */
-    public <R extends PluginParam, T> void streamChatCompletionWithPlugin(List<Message> messages, EventSourceListener eventSourceListener, PluginAbstract<R, T> plugin) {
-        this.streamChatCompletionWithPlugin(messages, ChatCompletion.Model.GPT_3_5_TURBO_16K_0613.getName(), eventSourceListener, plugin);
-    }
+//    public <R extends PluginParam, T> void streamChatCompletionWithPlugin(List<Message> messages, EventSourceListener eventSourceListener, PluginAbstract<R, T> plugin) {
+//        this.streamChatCompletionWithPlugin(messages, ChatCompletion.Model.GPT_3_5_TURBO_16K_0613.getName(), eventSourceListener, plugin);
+//    }
 
     /**
      * 插件问答简易版
@@ -330,10 +423,10 @@ public class OpenAiStreamClient {
      * @param <R>                 插件自定义函数的请求值
      * @param <T>                 插件自定义函数的返回值
      */
-    public <R extends PluginParam, T> void streamChatCompletionWithPlugin(List<Message> messages, String model, EventSourceListener eventSourceListener, PluginAbstract<R, T> plugin) {
-        ChatCompletion chatCompletion = ChatCompletion.builder().messages(messages).model(model).build();
-        this.streamChatCompletionWithPlugin(chatCompletion, eventSourceListener, plugin);
-    }
+//    public <R extends PluginParam, T> void streamChatCompletionWithPlugin(List<Message> messages, String model, EventSourceListener eventSourceListener, PluginAbstract<R, T> plugin) {
+//        ChatCompletion chatCompletion = ChatCompletion.builder().messages(messages).model(model).build();
+//        this.streamChatCompletionWithPlugin(chatCompletion, eventSourceListener, plugin);
+//    }
 
 
     /**
@@ -343,7 +436,7 @@ public class OpenAiStreamClient {
      * @return ImageResponse
      */
     public ImageResponse genImages(Image image) {
-        Single<ImageResponse> edits = this.openAiApi.genImages(image);
+        Single<ImageResponse> edits = this.embeddingApi.genImages(image);
         return edits.blockingGet();
     }
 
@@ -355,10 +448,10 @@ public class OpenAiStreamClient {
      */
     public <T extends BaseChatCompletion> ChatCompletionResponse chatCompletion(T chatCompletion) {
         if (chatCompletion instanceof ChatCompletion) {
-            Single<ChatCompletionResponse> chatCompletionResponse = this.openAiApi.chatCompletion((ChatCompletion) chatCompletion);
+            Single<ChatCompletionResponse> chatCompletionResponse = this.embeddingApi.chatCompletion((ChatCompletion) chatCompletion);
             return chatCompletionResponse.blockingGet();
         }
-        Single<ChatCompletionResponse> chatCompletionResponse = this.openAiApi.chatCompletionWithPicture((ChatCompletionWithPicture) chatCompletion);
+        Single<ChatCompletionResponse> chatCompletionResponse = this.embeddingApi.chatCompletionWithPicture((ChatCompletionWithPicture) chatCompletion);
         return chatCompletionResponse.blockingGet();
     }
 
@@ -375,7 +468,7 @@ public class OpenAiStreamClient {
         MultipartBody.Part multipartBody = MultipartBody.Part.createFormData("file", file.getName(), fileBody);
 
         RequestBody purposeBody = RequestBody.create(MediaType.parse("multipart/form-data"), purpose);
-        Single<UploadFileResponse> uploadFileResponse = this.openAiApi.uploadFile(multipartBody, purposeBody);
+        Single<UploadFileResponse> uploadFileResponse = this.embeddingApi.uploadFile(multipartBody, purposeBody);
         return uploadFileResponse.blockingGet();
     }
 
@@ -420,14 +513,14 @@ public class OpenAiStreamClient {
      * @Date 2023/7/6
      **/
     public String getModelName() {
-        Single<ModelResponse> models = this.openAiApi.models();
+        Single<ModelResponse> models = this.embeddingApi.models();
         List<Model> modelList = models.blockingGet().getData();
         for (Model model : modelList) {
-            if (Objects.equals(model.getId(), "gpt-4")) {
-                return "GPT-4.0";
+            if (Objects.equals(model.getId(), "m3e")) {
+                return "m3e";
             }
         }
-        return "GPT-3.5";
+        return "m3e";
     }
 
     /**
@@ -439,7 +532,7 @@ public class OpenAiStreamClient {
      * @return 消耗金额信息
      */
     public BillingUsage billingUsage(@NotNull LocalDate starDate, @NotNull LocalDate endDate) {
-        Single<BillingUsage> billingUsage = this.openAiApi.billingUsage(starDate, endDate);
+        Single<BillingUsage> billingUsage = this.embeddingApi.billingUsage(starDate, endDate);
         return billingUsage.blockingGet();
     }
 
@@ -450,7 +543,7 @@ public class OpenAiStreamClient {
      * @return EmbeddingResponse
      */
     public EmbeddingResponse embeddings(Embedding embedding) {
-        Single<EmbeddingResponse> embeddings = this.openAiApi.embeddings(embedding);
+        Single<EmbeddingResponse> embeddings = this.embeddingApi.embeddings(embedding);
         return embeddings.blockingGet();
     }
 
@@ -460,7 +553,7 @@ public class OpenAiStreamClient {
      * @return 账户信息
      */
     public Subscription subscription() {
-        Single<Subscription> subscription = this.openAiApi.subscription();
+        Single<Subscription> subscription = this.embeddingApi.subscription();
         return subscription.blockingGet();
     }
 
@@ -492,7 +585,7 @@ public class OpenAiStreamClient {
         if (Objects.nonNull(transcriptions.getTemperature())) {
             requestBodyMap.put(Transcriptions.Fields.temperature, RequestBody.create(MediaType.parse("multipart/form-data"), String.valueOf(transcriptions.getTemperature())));
         }
-        Single<WhisperResponse> whisperResponse = this.openAiApi.speechToTextTranscriptions(multipartBody, requestBodyMap);
+        Single<WhisperResponse> whisperResponse = this.embeddingApi.speechToTextTranscriptions(multipartBody, requestBodyMap);
         return whisperResponse.blockingGet();
     }
 
@@ -515,7 +608,7 @@ public class OpenAiStreamClient {
      * @since 1.1.2
      */
     public void textToSpeech(TextToSpeech textToSpeech, retrofit2.Callback callback) {
-        Call<ResponseBody> responseBody = this.openAiApi.textToSpeech(textToSpeech);
+        Call<ResponseBody> responseBody = this.embeddingApi.textToSpeech(textToSpeech);
         responseBody.enqueue(callback);
     }
 
@@ -526,7 +619,7 @@ public class OpenAiStreamClient {
      * @since 1.1.3
      */
     public ResponseBody textToSpeech(TextToSpeech textToSpeech) {
-        Call<ResponseBody> responseBody = this.openAiApi.textToSpeech(textToSpeech);
+        Call<ResponseBody> responseBody = this.embeddingApi.textToSpeech(textToSpeech);
         try {
             return responseBody.execute().body();
         } catch (IOException e) {
@@ -720,8 +813,8 @@ public class OpenAiStreamClient {
             return this;
         }
 
-        public OpenAiStreamClient build() {
-            return new OpenAiStreamClient(this);
+        public EmbeddingStreamClient build() {
+            return new EmbeddingStreamClient(this);
         }
     }
 }
